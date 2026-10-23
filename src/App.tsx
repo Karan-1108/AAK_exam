@@ -6,6 +6,7 @@
 import React, { useState, useEffect } from 'react';
 import { User } from './types';
 import { AuthService } from './services/authService';
+import { supabase } from './services/supabaseClient';
 
 // Common Components
 import { Navbar } from './components/common/Navbar';
@@ -41,16 +42,26 @@ import { DatasetManagementView } from './components/teacher/DatasetManagementVie
 export default function App() {
   const [currentUser, setCurrentUser] = useState<User | null>(null);
   const [authReady, setAuthReady] = useState(false);
+  const [passwordRecovery, setPasswordRecovery] = useState(
+    () => new URLSearchParams(window.location.hash.slice(1)).get('type') === 'recovery'
+      || new URLSearchParams(window.location.search).get('type') === 'recovery',
+  );
   const [activeView, setActiveView] = useState<string>('dashboard');
   const [sidebarCollapsed, setSidebarCollapsed] = useState<boolean>(false);
   const [activeExamId, setActiveExamId] = useState<string | null>(null);
   const [activeResultAttemptId, setActiveResultAttemptId] = useState<string | null>(null);
 
   useEffect(() => {
+    const { data: { subscription } } = supabase?.auth.onAuthStateChange((event) => {
+      if (event === 'PASSWORD_RECOVERY') setPasswordRecovery(true);
+    }) ?? { data: { subscription: null } };
+
     AuthService.getCurrentUser()
       .then(setCurrentUser)
       .catch((error) => console.error('[Auth] Could not restore session:', error))
       .finally(() => setAuthReady(true));
+
+    return () => subscription?.unsubscribe();
   }, []);
 
   // Sync initial view when user changes or from URL search parameters
@@ -92,6 +103,13 @@ export default function App() {
     setActiveResultAttemptId(null);
   };
 
+  const handlePasswordResetComplete = async () => {
+    await AuthService.logout();
+    setCurrentUser(null);
+    setPasswordRecovery(false);
+    window.history.replaceState({}, document.title, `${window.location.pathname}${window.location.search}`);
+  };
+
   const handleNavigate = (view: string) => {
     // Normalize aliases
     let target = view;
@@ -125,6 +143,16 @@ export default function App() {
 
   if (!authReady) {
     return <div className="min-h-screen bg-slate-950 text-slate-300 flex items-center justify-center">Checking your session…</div>;
+  }
+
+  if (passwordRecovery) {
+    return (
+      <AuthView
+        onLoginSuccess={handleLoginSuccess}
+        isPasswordRecovery
+        onPasswordResetComplete={handlePasswordResetComplete}
+      />
+    );
   }
 
   if (!currentUser) {

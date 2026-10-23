@@ -1,5 +1,5 @@
 /**
- * Authentication & Quick Role Switcher View
+ * Supabase-backed account sign-in and registration view
  */
 
 import React, { useState } from 'react';
@@ -24,12 +24,15 @@ import {
 
 interface AuthViewProps {
   onLoginSuccess: (user: User) => void;
+  isPasswordRecovery?: boolean;
+  onPasswordResetComplete?: () => Promise<void> | void;
 }
 
-export const AuthView: React.FC<AuthViewProps> = ({ onLoginSuccess }) => {
+export const AuthView: React.FC<AuthViewProps> = ({ onLoginSuccess, isPasswordRecovery = false, onPasswordResetComplete }) => {
   const [activeTab, setActiveTab] = useState<'student' | 'teacher' | 'register'>('student');
   const [emailOrUsername, setEmailOrUsername] = useState('');
   const [password, setPassword] = useState('');
+  const [passwordConfirmation, setPasswordConfirmation] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [displayName, setDisplayName] = useState('');
   const [studentRollNo, setStudentRollNo] = useState('');
@@ -52,7 +55,13 @@ export const AuthView: React.FC<AuthViewProps> = ({ onLoginSuccess }) => {
     setBusy(true);
 
     try {
-      if (activeTab === 'register') {
+      if (isPasswordRecovery) {
+        if (password.length < 8) throw new Error('Use a password with at least 8 characters.');
+        if (password !== passwordConfirmation) throw new Error('The passwords do not match.');
+        await AuthService.updatePassword(password);
+        setStatusMsg('Password updated. Sign in with your new password.');
+        await onPasswordResetComplete?.();
+      } else if (activeTab === 'register') {
         if (!emailOrUsername.includes('@')) throw new Error('Enter a valid email address.');
         if (password.length < 8) throw new Error('Use a password with at least 8 characters.');
         if (!displayName.trim()) throw new Error('Enter your full name.');
@@ -65,11 +74,29 @@ export const AuthView: React.FC<AuthViewProps> = ({ onLoginSuccess }) => {
         if (result.user) onLoginSuccess(result.user);
         else setStatusMsg('Account created. Check your email to verify the account, then sign in.');
       } else {
-        const user = await AuthService.login(emailOrUsername, password);
+        const user = await AuthService.login(emailOrUsername, password, activeTab);
         onLoginSuccess(user);
       }
     } catch (error) {
       setErrorMsg(error instanceof Error ? error.message : 'Authentication failed. Please try again.');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const handleForgotPassword = async () => {
+    setErrorMsg(null);
+    setStatusMsg(null);
+    if (!emailOrUsername.trim()) {
+      setErrorMsg('Enter your email address first.');
+      return;
+    }
+    setBusy(true);
+    try {
+      await AuthService.requestPasswordReset(emailOrUsername);
+      setStatusMsg('If an account exists for that email, Supabase will send a password reset link.');
+    } catch (error) {
+      setErrorMsg(error instanceof Error ? error.message : 'Could not send the password reset email.');
     } finally {
       setBusy(false);
     }
@@ -126,7 +153,7 @@ export const AuthView: React.FC<AuthViewProps> = ({ onLoginSuccess }) => {
         {/* Right Column: Role-Specific Login & Signup Form */}
         <div className="lg:col-span-7 p-6 sm:p-8 flex flex-col justify-center space-y-5">
           {/* Role Navigation Tabs */}
-          <div className="flex rounded-2xl bg-slate-950 p-1 border border-slate-800">
+          {!isPasswordRecovery && <div className="flex rounded-2xl bg-slate-950 p-1 border border-slate-800">
             <button
               onClick={() => handleTabChange('student')}
               className={`flex-1 py-2 rounded-xl text-xs font-bold transition flex items-center justify-center gap-2 ${
@@ -160,22 +187,26 @@ export const AuthView: React.FC<AuthViewProps> = ({ onLoginSuccess }) => {
               <Sparkles className="h-4 w-4" />
               <span>Register</span>
             </button>
-          </div>
+          </div>}
 
           <div>
             <h2 className="text-xl font-bold text-white">
-              {activeTab === 'student'
+              {isPasswordRecovery
+                ? 'Choose a New Password'
+                : activeTab === 'student'
                 ? 'Student Sign In'
                 : activeTab === 'teacher'
                 ? 'Teacher / Instructor Access'
                 : 'Create Academic Account'}
             </h2>
             <p className="text-xs text-slate-400 mt-1">
-              {activeTab === 'student'
+              {isPasswordRecovery
+                ? 'Set a new password for your account.'
+                : activeTab === 'student'
                 ? 'Sign in with your student email and password to continue learning.'
                 : activeTab === 'teacher'
                 ? 'Sign in with your verified teacher account to access instructor tools.'
-                : 'Register a new student or instructor profile.'}
+                : 'Create a student account. Teacher access is granted separately by an administrator.'}
             </p>
           </div>
 
@@ -193,7 +224,7 @@ export const AuthView: React.FC<AuthViewProps> = ({ onLoginSuccess }) => {
           {statusMsg && <div className="rounded-xl bg-emerald-950/40 border border-emerald-500/40 p-3 text-xs text-emerald-300 font-semibold">{statusMsg}</div>}
 
           <form onSubmit={handleSubmit} className="space-y-4 text-xs">
-            {activeTab === 'register' && (
+            {!isPasswordRecovery && activeTab === 'register' && (
               <>
                 <div>
                   <label className="text-slate-400 font-bold block mb-1">Full Name</label>
@@ -220,10 +251,8 @@ export const AuthView: React.FC<AuthViewProps> = ({ onLoginSuccess }) => {
               </>
             )}
 
-            <div>
-              <label className="text-slate-400 font-bold block mb-1">
-                {activeTab === 'register' ? 'Email' : 'Email'}
-              </label>
+            {!isPasswordRecovery && <div>
+              <label className="text-slate-400 font-bold block mb-1">Email</label>
               <input
                 required
                 value={emailOrUsername}
@@ -232,7 +261,7 @@ export const AuthView: React.FC<AuthViewProps> = ({ onLoginSuccess }) => {
                 placeholder="you@example.com"
                 className="w-full rounded-xl border border-slate-800 bg-slate-950 p-2.5 text-white placeholder:text-slate-400 focus:border-indigo-500 focus:outline-none"
               />
-            </div>
+            </div>}
 
             <div>
               <div className="flex items-center justify-between mb-1">
@@ -259,9 +288,10 @@ export const AuthView: React.FC<AuthViewProps> = ({ onLoginSuccess }) => {
                 <input
                   type={showPassword ? 'text' : 'password'}
                   required
+                  minLength={activeTab === 'register' || isPasswordRecovery ? 8 : undefined}
                   value={password}
                   onChange={e => setPassword(e.target.value)}
-                  placeholder="Enter your password"
+                  placeholder={isPasswordRecovery ? 'Enter your new password' : 'Enter your password'}
                   className="w-full rounded-xl border border-slate-800 bg-slate-950 p-2.5 pr-10 text-white placeholder:text-slate-500 focus:border-indigo-500 focus:outline-none font-mono"
                 />
                 <button
@@ -279,17 +309,42 @@ export const AuthView: React.FC<AuthViewProps> = ({ onLoginSuccess }) => {
               </div>
             </div>
 
+            {isPasswordRecovery && (
+              <div>
+                <label className="text-slate-400 font-bold block mb-1">Confirm new password</label>
+                <input
+                  type="password"
+                  required
+                  minLength={8}
+                  value={passwordConfirmation}
+                  onChange={e => setPasswordConfirmation(e.target.value)}
+                  placeholder="Re-enter your new password"
+                  className="w-full rounded-xl border border-slate-800 bg-slate-950 p-2.5 text-white placeholder:text-slate-500 focus:border-indigo-500 focus:outline-none font-mono"
+                />
+              </div>
+            )}
+
+            {!isPasswordRecovery && activeTab !== 'register' && (
+              <div className="text-right">
+                <button type="button" onClick={handleForgotPassword} disabled={busy} className="text-[11px] text-indigo-400 hover:text-indigo-300 font-semibold disabled:opacity-50">
+                  Forgot password?
+                </button>
+              </div>
+            )}
+
             <button
               type="submit"
               disabled={busy}
               className={`w-full py-3 rounded-xl text-xs sm:text-sm font-bold text-white transition shadow-lg flex items-center justify-center gap-2 ${
-                activeTab === 'teacher'
+                !isPasswordRecovery && activeTab === 'teacher'
                   ? 'bg-emerald-600 hover:bg-emerald-500 shadow-emerald-600/30'
                   : 'bg-indigo-600 hover:bg-indigo-500 shadow-indigo-600/30'
               }`}
             >
               <span>
-                {busy ? 'Please wait…' : activeTab === 'register'
+                {busy ? 'Please wait…' : isPasswordRecovery
+                  ? 'Update Password'
+                  : activeTab === 'register'
                   ? 'Create Academic Account'
                   : activeTab === 'teacher'
                   ? 'Sign in to Teacher Portal'
@@ -299,7 +354,7 @@ export const AuthView: React.FC<AuthViewProps> = ({ onLoginSuccess }) => {
             </button>
           </form>
 
-          <div className="pt-2 text-center text-xs text-slate-400">
+          {!isPasswordRecovery && <div className="pt-2 text-center text-xs text-slate-400">
             {activeTab === 'register' ? (
               <span>
                 Already have an account?{' '}
@@ -313,7 +368,7 @@ export const AuthView: React.FC<AuthViewProps> = ({ onLoginSuccess }) => {
               </span>
             ) : (
               <span>
-                Need a new student or teacher account?{' '}
+                Need a student account?{' '}
                 <button
                   type="button"
                   onClick={() => handleTabChange('register')}
@@ -323,7 +378,7 @@ export const AuthView: React.FC<AuthViewProps> = ({ onLoginSuccess }) => {
                 </button>
               </span>
             )}
-          </div>
+          </div>}
         </div>
       </div>
     </div>

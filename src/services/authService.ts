@@ -44,12 +44,23 @@ export const AuthService = {
     return getProfile(user.id, user.email);
   },
 
-  async login(email: string, password: string): Promise<User> {
+  async login(email: string, password: string, expectedRole: 'student' | 'teacher'): Promise<User> {
     const client = requireClient();
     const { data, error } = await client.auth.signInWithPassword({ email: email.trim(), password });
     if (error || !data.user?.email) throw new Error(error?.message || 'Unable to sign in. Check your email and password.');
     if (data.session?.access_token) apiClient.setToken(data.session.access_token);
-    return getProfile(data.user.id, data.user.email);
+    const user = await getProfile(data.user.id, data.user.email);
+    if (user.role !== expectedRole) {
+      try {
+        await client.auth.signOut();
+      } finally {
+        apiClient.clearToken();
+      }
+      throw new Error(expectedRole === 'teacher'
+        ? 'This account does not have teacher access. Ask an administrator to approve your teacher account.'
+        : 'This account is not registered as a student. Use the Teacher Portal if you are an instructor.');
+    }
+    return user;
   },
 
   async register(params: { email: string; password: string; displayName: string; studentId?: string }): Promise<{ user: User | null; confirmationRequired: boolean }> {
@@ -58,7 +69,10 @@ export const AuthService = {
     const { data, error } = await client.auth.signUp({
       email,
       password: params.password,
-      options: { data: { display_name: params.displayName.trim(), student_id: params.studentId?.trim() || null } },
+      options: {
+        data: { display_name: params.displayName.trim(), student_id: params.studentId?.trim() || null },
+        emailRedirectTo: window.location.origin,
+      },
     });
     if (error) throw new Error(error.message);
     if (!data.user) throw new Error('Account creation did not return a user. Please try again.');
@@ -75,6 +89,20 @@ export const AuthService = {
     const { error } = await supabase.auth.signOut();
     if (error) throw new Error(error.message);
     apiClient.clearToken();
+  },
+
+  async requestPasswordReset(email: string): Promise<void> {
+    const client = requireClient();
+    const { error } = await client.auth.resetPasswordForEmail(email.trim(), {
+      redirectTo: window.location.origin,
+    });
+    if (error) throw new Error(error.message);
+  },
+
+  async updatePassword(password: string): Promise<void> {
+    const client = requireClient();
+    const { error } = await client.auth.updateUser({ password });
+    if (error) throw new Error(error.message);
   },
 
   isConfigured: isSupabaseConfigured,

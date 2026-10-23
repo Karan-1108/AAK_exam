@@ -8,6 +8,9 @@ create table if not exists public.profiles (
   created_at timestamptz not null default now()
 );
 
+-- Expose only the profile operations the signed-in app needs through Supabase's Data API.
+grant select, insert on public.profiles to authenticated;
+
 alter table public.profiles enable row level security;
 
 create policy "Users can read their own profile"
